@@ -1,0 +1,470 @@
+#!/usr/bin/env node
+(function(define) {'use strict'
+	define("latte", ["require", "exports", "module", "window"], 
+		function(require, exports, module, window) {
+			var qiniu = function(methodName) {
+				var applyArray = Array.prototype.splice.call(arguments, 1);
+	 			methodName = methodName || "help";
+	 			var handle = qiniu[methodName] || qiniu["help"];
+	 			handle.apply(null, applyArray);
+			};
+			(function() {
+				var Path = require("path")
+					, latte_lib = require("latte_lib");
+				var self = this;
+					var changeConfig = function(config, sets) {
+						var c = JSON.stringify(config);
+						Object.keys(sets).forEach(function(key) {
+							c = c.replace(new RegExp("{{"+key+"}}","gm"), sets[key])
+						});
+						return JSON.parse(c);
+						//return JSON.parse(latte_lib.mustache(JSON.stringify(config), sets));
+					}
+				var GetConfig = function() {
+					var config;
+					var index = process.argv.indexOf("-c");
+					if(index != -1) {
+						config = process.argv[index+1];
+					}
+
+					config = config || ".latte/qiniu.json";
+					var qiniuConfigPath = Path.join(process.cwd()+"/"+config);
+					var qiniuConfig;
+					try {
+						qiniuConfig = require(qiniuConfigPath);
+					}catch(e) {
+						return null;
+					}
+					var packageConfigPath = Path.join(process.cwd(), "package.json");
+					var packageConfig;
+					try {
+						packageConfig = require(packageConfigPath);
+					}catch(e) {
+						packageConfig = {};
+					}
+					
+					qiniuConfig.updateDirs = qiniuConfig.updateDirs || {};
+					qiniuConfig.updateFiles = qiniuConfig.updateFiles || {};
+					var sets = latte_lib.format.getDateReplace(new Date());
+					if(packageConfig.version) { sets.version = packageConfig.version;}
+					qiniuConfig.updateDirs = changeConfig(qiniuConfig.updateDirs, sets);
+					qiniuConfig.updateFiles = changeConfig(qiniuConfig.updateFiles, sets);
+					
+					if(qiniuConfig.updateFiles) {
+						var sets = latte_lib.format.getDateReplace(new Date());
+						if(packageConfig.version) { sets.version = packageConfig.version;}
+						qiniuConfig.updateDirs = changeConfig(qiniuConfig.updateDirs, sets);
+					}
+					qiniu.conf.ACCESS_KEY = qiniuConfig.access_key;
+					qiniu.conf.SECRET_KEY = qiniuConfig.secret_key;
+					return qiniuConfig;
+				}
+				var GetToken= function(config) {
+					var putPolicy = new qiniu.rs.PutPolicy(config.bucket);
+					return putPolicy.token();
+				}
+				var qiniu = require("qiniu");
+				this.update = function(filename, filePath) {
+					var config = GetConfig();
+					if(!config) { return; }
+					var token = GetToken(config);
+					//var filename = "/test.js";
+					//var filePath = "./test.js";
+				  	var extra = new qiniu.io.PutExtra();
+				  	extra.params = {xUser : config.user || ""}; 
+					qiniu.io.putFile(token, filename, filePath, extra, function(err, ret) {
+						if(!err) {
+							console.log(ret.key, ret.hash);
+						}else{
+							console.log(err);
+						}
+					});		
+				}
+				var Fs = require("fs");
+				this.testUpdateAll = function() {
+					var config = GetConfig();
+					if(!config) { return console.log("no find config");}
+					var token = GetToken(config);
+					var funcs = [];
+					var types = config.types;
+					var mfiles = {};
+					for(var key in config.updateFiles) {
+						var value = config.updateFiles[key];
+						mfiles[Path.join(key)] = Path.join(value);
+						try{
+							var steam = new latte_lib.fs.createReadStream(Path.join(value));
+							
+						}catch(e) {
+							console.log(e);
+						}
+					}
+					return console.log(mfiles);
+					for(var key in config.updateDirs) {
+						var value = config.updateDirs[key];
+						var readDir = function(key, value) {
+							var files = Fs.readdirSync(value);
+							files.forEach(function(file) {
+								var stat = Fs.statSync(Path.join(value, file));
+								if(stat.isDirectory()) {
+									readDir(key + "/" + file, value + "/" + file);
+								}else{
+									if(config.types && config.types.indexOf(Path.extname(file)) == -1) {
+										return;
+									}
+									
+									mfiles[Path.join(key+"/"+file)] = Path.join(value+"/" + file);
+									
+									
+								}
+							});
+						}
+						readDir(key, value);					
+					}
+					;
+					console.log(mfiles);
+					
+				}
+				this.updateAllTest = function() {
+					var config = GetConfig();
+					if(!config) { return console.log("no find config");}
+					var token = GetToken(config);
+					var funcs = [];
+					var types = config.types;
+					var mfiles = {};
+					for(var key in config.updateFiles) {
+						var value = config.updateFiles[key];
+						mfiles[Path.join(key)] = Path.join(value);	
+					}
+					for(var key in config.updateDirs) {
+						var value = config.updateDirs[key];
+						var readDir = function(key, value) {
+							var files = Fs.readdirSync(value);
+							files.forEach(function(file) {
+								var stat = Fs.statSync(Path.join(value, file));
+								if(stat.isDirectory()) {
+									readDir(key + "/" + file, value + "/" + file);
+								}else{
+									if(config.types && config.types.indexOf(Path.extname(file)) == -1) {
+										return;
+									}
+									mfiles[Path.join(key+"/"+file)] = Path.join(value+"/" + file);	
+								}
+							});
+						}
+						readDir(key, value);					
+					}
+					;
+					var time = Date.now();
+					var len = require("os").cpus().length;
+					var child = require("child_process");
+					var childs = [];
+					var fileKeys = Object.keys(mfiles);
+					var allLength = fileKeys.length;
+					var runs = [];
+
+					var fp = function(work) {
+						var key = fileKeys.shift();
+						if(!key) {
+							console.log("work over:",work.id);
+							work.kill();
+							if(runs.length == 0) {
+								console.log("update over :", access, allLength, Date.now() - time + "ms" );
+							}
+							return;
+						}
+						runs.push(key);
+						work.send({
+							type: "update",
+							token: token,
+							key: key,
+							value: mfiles[key]
+						});
+					}
+					var access = 0;
+					var fpok = function(m, work) {
+						var index = runs.indexOf(m.key);
+						if(index != -1) {
+							runs.splice(index, 1);
+						}
+						if(m.err) {
+							fileKeys.push(m.key);
+						}else{
+							access++;
+						}
+						fp(work);
+					}
+					var createWork = function(i) {
+						var work= child.fork(Path.join(__dirname,"../lib/child.js"));
+						work.id = i;
+						work.on("message", function(m) {
+							fpok(m,work);
+						});
+						work.on("error", function() {
+							createWork(work.id);
+						});
+						work.send({
+							type: "start",
+							config: config
+						});
+						fp(work);
+						childs[i] = work;
+					}
+
+					for(var i = 0; i < len; i++) {
+						createWork(i);
+					}
+					
+
+				}
+				this.updateAll = function() {
+					var config = GetConfig();
+					if(!config) { return console.log("no find config");}
+					var token = GetToken(config);
+					var funcs = [];
+					var types = config.types;
+					var mfiles = {};
+					for(var key in config.updateFiles) {
+						var value = config.updateFiles[key];
+						mfiles[Path.join(key)] = Path.join(value);
+						(function(key, value) {
+							funcs.push(function(callback) {
+								var extra = new qiniu.io.PutExtra();
+	  							extra.params = {xUser : config.user || ""}; 
+								
+									qiniu.io.putFile(token, Path.join(key ),Path.join(value), extra,function(err, ret) {
+										if(err) {
+											console.log("file "+value+ " failed " , err);
+											return callback(err, ret);
+										}
+										callback(err , ret);
+									});
+							});
+						})(key, value);
+					}
+					for(var key in config.updateDirs) {
+						var value = config.updateDirs[key];
+						var readDir = function(key, value) {
+							var files = Fs.readdirSync(value);
+							files.forEach(function(file) {
+								var stat = Fs.statSync(Path.join(value, file));
+								if(stat.isDirectory()) {
+									readDir(key + "/" + file, value + "/" + file);
+								}else{
+									if(config.types && config.types.indexOf(Path.extname(file)) == -1) {
+										return;
+									}
+									(function(key, value) {
+										mfiles[Path.join(key+"/"+file)] = Path.join(value+"/" + file);
+										
+
+											funcs.push(function(callback) {
+												var extra = new qiniu.io.PutExtra();
+					  							extra.params = {xUser : config.user || ""}; 
+												console.log(Path.join(value + "/" + file));
+												qiniu.io.putFile(token, Path.join(key + "/" + file),Path.join(value + "/" + file), extra, function(err,ret) {
+													if(err) {
+														console.log("dir in file "+value+ "failed");
+														return callback(err, ret);
+													}
+													callback(err , ret);
+												});
+											});
+										
+										
+									
+									})(key, value);
+									
+								}
+							});
+						}
+						readDir(key, value);					
+					}
+					;
+					var time = Date.now();
+					latte_lib.async.series(funcs, function(err, result) {
+						if(err) {
+							return console.log("updateAll failed", err);
+						}
+						console.log((Date.now() - time) + "ms", funcs.length);
+						//console.log(mfiles);
+					});
+					
+				}
+				/**
+					qiniu remove A B
+				*/
+				this.remove = function(filename) {
+					var config = GetConfig();
+					if(!config) { return; }
+					var client = new qiniu.rs.Client();
+					console.log(config.bucket, filename);
+					client.remove(config.bucket, filename, function(err) {
+						if(!err) {
+							console.log("remove ok!");
+						}else{
+							console.log("remove failed ",err);
+						}
+					});
+				}
+				this.removeAll = function(match) {
+					var config = GetConfig();
+					if(!config) { return console.log("no find config"); }
+					self.find(match, function(err, res) {
+						if(err) {
+							return console.log(err);
+						}
+						var removeArray = res.map(function(o) {
+							return new qiniu.rs.EntryPath(config.bucket, o.key);
+						});
+						var client = new qiniu.rs.Client();
+						client.batchDelete(removeArray, function(err, ret) {
+						  	if (!err) {
+							    console.log("removeAll ok");
+						  	} else {
+					    		console.log("removeAll failed ",err);
+							    // http://developer.qiniu.com/docs/v6/api/reference/codes.html
+						  	}
+						});
+					});
+				}
+				/**
+					qiniu copy A B
+				*/
+				this.copy = function(filename, copyFilename) {
+					var config = GetConfig();
+					if(!config) { return; }
+					var client = new qiniu.rs.Client();
+					client.copy(config.bucket, filename, config.bucket, copyFilename ,function(err, ret) {
+						if(!err) {
+
+						}else{
+							console.log("copy failed ",err);
+						}
+					});
+				}
+				/**
+					qiniu move A B
+				*/
+				this.move  = function(filename, moveFileName) {
+					var config = GetConfig();
+					if(!config) { return; }
+					var client = new qiniu.rs.Client();
+					client.move(config.bucket, filename, config.bucket, moveFileName, function(err, ret) {
+						if(!err) {
+
+						}else{
+							console.log("move failed", err);
+						}
+					});
+				}
+				this.find = function(prefix, callback) {
+					var config = GetConfig();
+					callback = callback || function(err, res) {
+						if(err) {
+							console.log("find failed ", err);
+						}else{
+							console.log(res);
+						}
+						
+					};
+					if(!config) { return; }
+					prefix = prefix || "";
+					var res = [];
+					var doFunc = function(mark) {
+						qiniu.rsf.listPrefix(config.bucket, prefix , mark, null, function(err, ret) {
+							if(err) {
+								return callback(err);
+							}
+							res = res.concat(ret.items);
+							if(ret.marker) {
+								doFunc(ret.marker);
+							}else{
+								console.log( res.length);
+								return callback(null, res);
+							}
+							
+						});
+					}
+					doFunc();
+				}
+				this.backup = function(key, path) {
+					
+					var config = GetConfig();
+					if(!config) { return; }
+					require("../lib/download")(config.url+key, path, function(err, result) {
+						if(err) {
+							return console.log("download fail");
+						}else{
+							return console.log("download ok")
+						}
+					});
+				}
+				this.backUpAll = function(match, dir) {
+					var config = GetConfig();
+					if(!config) { return console.log("no find config"); }
+					self.find(match, function(err, res) {
+						if(err) {
+							return console.log(err);
+						}
+						var allLength = res.length;
+						var len = require("os").cpus().length;
+						var child = require("child_process");
+						var childs = [];
+						var runs = [];
+						var fp = function(work) {
+							var o = res.shift();
+							if(!o) {
+								console.log("work over:",work.id);
+								work.kill();
+								if(runs.length == 0) {
+									console.log("download over :", access, allLength, Date.now() - time + "ms" );
+								}
+								return;
+							}
+							runs.push(o);
+							work.send({
+								type: "download",
+								key: config.url+o.key,
+								value: Path.join(dir || config.backupDir || "./", o.key)
+							});
+						}
+						var fpok = function(m,work) {
+							var index = runs.indexOf(m.key);
+							if(index != -1) {
+								runs.splice(index, 1);
+							}
+							if(m.err) {
+								res.push(m.key);
+							}else{
+								access++;
+							}
+							fp(work);
+						}
+						var createWork = function(i) {
+							var work= child.fork(Path.join(__dirname,"../lib/child.js"));
+							work.id = i;
+							work.on("message", function(m) {
+								fpok(m,work);
+							});
+							work.on("error", function() {
+								createWork(work.id);
+							});
+							work.send({
+								type: "start",
+								config: config
+							});
+							fp(work);
+							childs[i] = work;
+						}
+						for(var i = 0; i < 1; i++) {
+							createWork(i);
+						}
+					});
+				}
+				this.help = function() {
+					console.log("help...");
+				}
+			}).call(qiniu);
+			module.exports = qiniu;
+		});
+})(typeof define === "function"? define: function(name, reqs, factory) { factory(require, exports, module); });
