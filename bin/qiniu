@@ -424,12 +424,13 @@
 							if(!o) {
 								console.log("work over:",work.id);
 								work.kill();
+								
 								if(runs.length == 0) {
 									console.log("download over :", access, allLength, Date.now() - time + "ms" );
 								}
 								return;
 							}
-							runs.push(o);
+							runs.push(config.url+o.key);
 							var filePath = Path.join(dir || config.backupDir || "./", o.key);
 							try {
 								latte_lib.fs.mkdirSync(Path.dirname(filePath));
@@ -449,7 +450,9 @@
 								runs.splice(index, 1);
 							}
 							if(m.err) {
-								res.push(m.key);
+								res.push({
+									key: Path.relative(config.url, m.key)
+								});
 							}else{
 								access++;
 							}
