@@ -64,6 +64,12 @@
 					return putPolicy.token();
 				}
 				var qiniu = require("qiniu");
+				/**
+					@method update
+					@param filename {String}
+					@param filePath {String}
+
+				*/
 				this.update = function(filename, filePath) {
 					var config = GetConfig();
 					if(!config) { return; }
@@ -124,7 +130,7 @@
 					console.log(mfiles);
 					
 				}
-				this.updateAllTest = function() {
+				this.updateAll = function() {
 					var config = GetConfig();
 					if(!config) { return console.log("no find config");}
 					var token = GetToken(config);
@@ -209,14 +215,14 @@
 						fp(work);
 						childs[i] = work;
 					}
-
+					var len = require("os").cpus().length;
 					for(var i = 0; i < len; i++) {
 						createWork(i);
 					}
 					
 
 				}
-				this.updateAll = function() {
+				this.updateAllOne = function() {
 					var config = GetConfig();
 					if(!config) { return console.log("no find config");}
 					var token = GetToken(config);
@@ -263,10 +269,10 @@
 												console.log(Path.join(value + "/" + file));
 												qiniu.io.putFile(token, Path.join(key + "/" + file),Path.join(value + "/" + file), extra, function(err,ret) {
 													if(err) {
-														console.log("dir in file "+value+ "failed");
-														return callback(err, ret);
+														console.log("dir in file "+key+"/"+file + " failed");
+														//return callback(err, ret);
 													}
-													callback(err , ret);
+													callback(null , ret);
 												});
 											});
 										
@@ -399,7 +405,7 @@
 						}
 					});
 				}
-				this.backUpAll = function(match, dir) {
+				this.backupAll = function(match, dir) {
 					var config = GetConfig();
 					if(!config) { return console.log("no find config"); }
 					self.find(match, function(err, res) {
@@ -409,8 +415,10 @@
 						var allLength = res.length;
 						var len = require("os").cpus().length;
 						var child = require("child_process");
+						var time = Date.now();
 						var childs = [];
 						var runs = [];
+						var access = 0;
 						var fp = function(work) {
 							var o = res.shift();
 							if(!o) {
@@ -422,10 +430,17 @@
 								return;
 							}
 							runs.push(o);
+							var filePath = Path.join(dir || config.backupDir || "./", o.key);
+							try {
+								latte_lib.fs.mkdirSync(Path.dirname(filePath));
+							}catch(e) {
+
+							}
+							
 							work.send({
 								type: "download",
 								key: config.url+o.key,
-								value: Path.join(dir || config.backupDir || "./", o.key)
+								value: filePath
 							});
 						}
 						var fpok = function(m,work) {
@@ -456,7 +471,7 @@
 							fp(work);
 							childs[i] = work;
 						}
-						for(var i = 0; i < 1; i++) {
+						for(var i = 0, len = require("os").cpus().length; i < len; i++) {
 							createWork(i);
 						}
 					});
